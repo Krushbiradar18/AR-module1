@@ -2,7 +2,7 @@ import io
 import numpy as np
 from PIL import Image
 import trimesh
-from flask import Flask, request, send_file, abort, Response, jsonify
+from flask import Flask, request, send_file, abort, Response, redirect, url_for
 from flask_cors import CORS
 
 # ---- Flask App ----
@@ -11,7 +11,8 @@ CORS(app)
 
 @app.route("/")
 def home():
-    return "Flask backend is running 🚀"
+    # Redirect root to /viewer
+    return redirect(url_for("viewer"))
 
 def create_glb_from_image(file_like, width_m=0.5, thickness_m=0.01):
     img = Image.open(file_like).convert("RGBA")
