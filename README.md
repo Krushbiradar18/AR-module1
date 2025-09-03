@@ -2,6 +2,10 @@
 
 This application allows users to upload their artwork and view it in Augmented Reality (AR).
 
+## Live Demo
+
+You can try the live demo at: [https://armodule-knu9fivlq-krushnalis-projects.vercel.app](https://armodule-knu9fivlq-krushnalis-projects.vercel.app)
+
 ## Features
 
 - Upload any image
@@ -27,10 +31,10 @@ This application allows users to upload their artwork and view it in Augmented R
 
 ```bash
 # Clone the repository
-git clone <your-repo-url>
+git clone https://github.com/Krushbiradar18/AR-module1.git
 
 # Navigate to the project directory
-cd ar_module
+cd AR-module1
 
 # Install dependencies
 pip install -r requirements.txt
@@ -41,13 +45,41 @@ python app.py
 
 ## Deployment
 
-This application is configured to be deployed on Vercel.
+This application is deployed on Vercel. To deploy your own instance:
 
-1. Create a Vercel account if you don't have one
-2. Install the Vercel CLI: `npm i -g vercel`
-3. Run `vercel` in the project directory and follow the prompts
+1. Fork this repository
+2. Sign up for a Vercel account if you don't have one
+3. Import your repository in the Vercel dashboard
+4. Deploy it with default settings
 
-## Requirements
+### Vercel Deployment Settings
 
-- Python 3.7+
-- Required Python packages listed in requirements.txt
+The application uses the following files for Vercel deployment:
+- `vercel.json` - Configuration for the Vercel platform
+- `requirements.txt` - Python dependencies
+- `app.py` - Main application code
+- `wsgi.py` - WSGI entry point
+
+## AR Compatibility
+
+For the AR features to work properly:
+
+### iOS Requirements:
+- iOS 12 or later
+- Safari browser
+- ARKit-compatible device (iPhone 6s or newer)
+
+### Android Requirements:
+- Android 8.0 or later
+- ARCore-compatible device
+- Chrome browser (version 79 or newer)
+
+## Notes on AR Functionality
+
+- AR features require HTTPS, which is why it works better on the deployed version
+- Local testing may have limitations with AR features
+- For best results, ensure good lighting conditions when using AR
+
+## License
+
+MIT
