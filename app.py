@@ -7,7 +7,16 @@ from flask_cors import CORS
 
 # ---- Flask App ----
 app = Flask(__name__)
-CORS(app)
+# Allow CORS from any origin with any headers
+CORS(app, resources={r"/*": {"origins": "*", "allow_headers": "*"}})
+
+# Add security headers for AR support
+@app.after_request
+def add_header(response):
+    response.headers['Cross-Origin-Opener-Policy'] = 'same-origin'
+    response.headers['Cross-Origin-Embedder-Policy'] = 'require-corp'
+    response.headers['Cross-Origin-Resource-Policy'] = 'cross-origin'
+    return response
 
 @app.route("/")
 def home():
@@ -45,12 +54,15 @@ def make_glb():
         abort(400, "Upload an image under 'file'.")
     f = request.files['file']
     glb_bytes = create_glb_from_image(f.stream)
-    return send_file(
+    response = send_file(
         io.BytesIO(glb_bytes),
         mimetype="model/gltf-binary",
         as_attachment=True,
         download_name="photo_frame.glb"
     )
+    # Add headers specifically for GLB files to help with AR
+    response.headers['Content-Disposition'] = 'inline; filename="photo_frame.glb"'
+    return response
 
 @app.route("/viewer")
 def viewer():
