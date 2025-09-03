@@ -46,3 +46,4 @@ Thumbs.db
 # Vercel
 .vercel/
 .now/
+.vercel
