@@ -7,15 +7,28 @@ from flask_cors import CORS
 
 # ---- Flask App ----
 app = Flask(__name__)
-# Allow CORS from any origin with any headers
-CORS(app, resources={r"/*": {"origins": "*", "allow_headers": "*"}})
+# Allow CORS from any origin with any headers - Chrome-friendly configuration
+CORS(app, resources={
+    r"/*": {
+        "origins": "*",
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization", "Access-Control-Allow-Credentials", "Cache-Control"]
+    }
+})
 
 # Add security headers for AR support
 @app.after_request
 def add_header(response):
-    response.headers['Cross-Origin-Opener-Policy'] = 'same-origin'
-    response.headers['Cross-Origin-Embedder-Policy'] = 'require-corp'
-    response.headers['Cross-Origin-Resource-Policy'] = 'cross-origin'
+    # Chrome-specific CORS headers
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Accept, Authorization, X-Requested-With, Origin'
+    response.headers['Access-Control-Max-Age'] = '86400'  # 24 hours
+    response.headers['Access-Control-Allow-Credentials'] = 'false'
+    # Remove headers that can cause issues in Chrome
+    response.headers.pop('Cross-Origin-Opener-Policy', None)
+    response.headers.pop('Cross-Origin-Embedder-Policy', None)
+    response.headers.pop('Cross-Origin-Resource-Policy', None)
     return response
 
 @app.route("/")
@@ -23,46 +36,107 @@ def home():
     # Redirect root to /viewer
     return redirect(url_for("viewer"))
 
+@app.route("/health", methods=["GET", "OPTIONS"])
+def health_check():
+    # Simple health check endpoint for testing connectivity
+    if request.method == "OPTIONS":
+        response = Response(status=200)
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Accept'
+        return response
+    
+    return Response("OK", status=200, mimetype='text/plain')
+
 def create_glb_from_image(file_like, width_m=0.5, thickness_m=0.01):
-    img = Image.open(file_like).convert("RGBA")
-    w_px, h_px = img.size
-    aspect = h_px / float(w_px)
+    try:
+        img = Image.open(file_like).convert("RGBA")
+        w_px, h_px = img.size
+        
+        # Validate image dimensions
+        if w_px == 0 or h_px == 0:
+            raise ValueError("Invalid image dimensions")
+        
+        aspect = h_px / float(w_px)
 
-    W = float(width_m)
-    H = W * aspect
-    T = float(thickness_m)
+        W = float(width_m)
+        H = W * aspect
+        T = float(thickness_m)
 
-    box = trimesh.creation.box(extents=(W, H, T))
-    box.apply_translation((0, 0, T/2.0))
+        box = trimesh.creation.box(extents=(W, H, T))
+        box.apply_translation((0, 0, T/2.0))
 
-    uv = np.zeros((len(box.vertices), 2), dtype=np.float32)
-    verts = box.vertices
-    min_xy = verts[:, :2].min(axis=0)
-    max_xy = verts[:, :2].max(axis=0)
-    span_xy = np.maximum(max_xy - min_xy, 1e-8)
-    uv[:] = (verts[:, :2] - min_xy) / span_xy
+        uv = np.zeros((len(box.vertices), 2), dtype=np.float32)
+        verts = box.vertices
+        min_xy = verts[:, :2].min(axis=0)
+        max_xy = verts[:, :2].max(axis=0)
+        span_xy = np.maximum(max_xy - min_xy, 1e-8)
+        uv[:] = (verts[:, :2] - min_xy) / span_xy
 
-    texture = trimesh.visual.texture.TextureVisuals(uv=uv, image=img)
-    box.visual = texture
+        texture = trimesh.visual.texture.TextureVisuals(uv=uv, image=img)
+        box.visual = texture
 
-    glb_bytes = box.export(file_type="glb")
-    return glb_bytes if isinstance(glb_bytes, bytes) else glb_bytes.read()
+        glb_bytes = box.export(file_type="glb")
+        return glb_bytes if isinstance(glb_bytes, bytes) else glb_bytes.read()
+        
+    except Exception as e:
+        print(f"Error in create_glb_from_image: {str(e)}")
+        return None
 
-@app.route("/make-glb", methods=["POST"])
+@app.route("/make-glb", methods=["POST", "OPTIONS"])
 def make_glb():
-    if 'file' not in request.files:
-        abort(400, "Upload an image under 'file'.")
-    f = request.files['file']
-    glb_bytes = create_glb_from_image(f.stream)
-    response = send_file(
-        io.BytesIO(glb_bytes),
-        mimetype="model/gltf-binary",
-        as_attachment=True,
-        download_name="photo_frame.glb"
-    )
-    # Add headers specifically for GLB files to help with AR
-    response.headers['Content-Disposition'] = 'inline; filename="photo_frame.glb"'
-    return response
+    # Handle CORS preflight requests - Chrome-specific
+    if request.method == "OPTIONS":
+        response = Response(status=200)
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Accept, Authorization, X-Requested-With, Origin'
+        response.headers['Access-Control-Max-Age'] = '86400'
+        response.headers['Access-Control-Allow-Credentials'] = 'false'
+        response.headers['Content-Length'] = '0'
+        return response
+    
+    try:
+        # Validate request
+        if 'image' not in request.files:
+            print("Debug: No 'image' in request.files")
+            print("Debug: Available keys:", list(request.files.keys()))
+            return Response("No file uploaded. Please select an image file.", status=400)
+        
+        f = request.files['image']
+        
+        # Check if file is selected
+        if f.filename == '':
+            return Response("No file selected. Please choose an image.", status=400)
+        
+        # Basic file type validation
+        if not f.content_type or not f.content_type.startswith('image/'):
+            return Response("Invalid file type. Please upload an image file (JPG, PNG, etc.).", status=400)
+        
+        # Process the image
+        glb_bytes = create_glb_from_image(f.stream)
+        
+        if not glb_bytes:
+            return Response("Failed to process image. Please try a different image.", status=500)
+        
+        response = send_file(
+            io.BytesIO(glb_bytes),
+            mimetype="model/gltf-binary",
+            as_attachment=False,  # Changed to False for better browser handling
+            download_name="photo_frame.glb"
+        )
+        
+        # Set proper headers for GLB files
+        response.headers['Content-Disposition'] = 'inline; filename="photo_frame.glb"'
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        
+        return response
+        
+    except Exception as e:
+        print(f"Error in make_glb: {str(e)}")  # Server-side logging
+        return Response(f"Server error while processing image: {str(e)}", status=500)
 
 @app.route("/viewer")
 def viewer():
@@ -182,34 +256,37 @@ def viewer():
             <li>Position your device toward a wall to place the artwork.</li>
           </ul>
         </div>
-        <model-viewer id="viewer"
-          ar
-          ar-modes="webxr scene-viewer quick-look"
-          ar-placement="wall"
-          ar-scale="fixed"
-          camera-controls
-          autoplay
-          shadow-intensity="1"
-          touch-action="pan-y"
-          reveal="interaction"
-          loading="eager"
-          ar-status="not-presenting"
-          alt="A 3D model of your artwork">
-          <button slot="ar-button" id="built-in-ar-button" style="display:none;">View in AR</button>
-          <div slot="poster" style="background-color: #f5f5f5; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center;">
-            <p>Upload an image to view in 3D and AR</p>
-          </div>
-          <div slot="progress-bar" style="height: 4px; background: #ddd; position: relative;">
-            <div id="progress" style="height: 100%; background: #4CAF50; width: 0%;"></div>
-          </div>
-        </model-viewer>
-
-        <script>
-          const viewer = document.getElementById("viewer");
+        <!-- AR Viewer - Simple version -->
+        <model-viewer id="ar-viewer"
+                      ar
+                      ar-modes="webxr scene-viewer quick-look"
+                      ar-scale="auto"
+                      camera-controls
+                      shadow-intensity="1"
+                      exposure="1"
+                      auto-rotate
+                      style="width: 100%; height: 400px; background-color: #f0f0f0; border-radius: 8px;"
+                      poster="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100'%3E%3Crect width='100' height='100' fill='%23f0f0f0'/%3E%3Ctext x='50%25' y='50%25' text-anchor='middle' dy='.3em' fill='%23666'%3EUpload Image%3C/text%3E%3C/svg%3E">
+        </model-viewer>        <script>
+        document.addEventListener('DOMContentLoaded', function() {
+          const viewer = document.getElementById("ar-viewer");
           const arButton = document.getElementById("ar-button");
           const status = document.getElementById("status");
           const arInstructions = document.getElementById("ar-instructions");
-          const builtInArButton = document.getElementById("built-in-ar-button");
+          
+          // Check if elements exist to prevent null errors
+          if (!viewer) {
+            console.error("AR viewer element not found");
+            return;
+          }
+          if (!arButton) {
+            console.error("AR button element not found");
+            return;
+          }
+          if (!status) {
+            console.error("Status element not found");
+            return;
+          }
           
           // Check if AR is supported
           const isARSupported = () => {
@@ -232,7 +309,7 @@ def viewer():
             // Chrome on Android needs WebXR or Scene Viewer
             if (isAndroid && isChrome) {
               // Chrome 79+ on Android 8.0+ should support AR
-              const match = navigator.userAgent.match(/Chrome\/([0-9]+)/);
+              const match = navigator.userAgent.match(/Chrome\\/([0-9]+)/);
               if (match) {
                 const version = parseInt(match[1], 10);
                 return version >= 79 || hasWebXR;
@@ -248,10 +325,29 @@ def viewer():
             status.textContent = message;
             status.className = type;
             status.style.display = "block";
+            
+            // Keep launching messages visible longer
+            const duration = (type === "info" && message.includes("Launching")) ? 8000 : 5000;
+            
             setTimeout(() => {
               status.style.display = "none";
-            }, 5000);
+            }, duration);
           };
+
+          // Check camera permissions for AR
+          const checkCameraPermissions = async () => {
+            try {
+              const permissions = await navigator.permissions.query({ name: 'camera' });
+              console.log('Camera permission status:', permissions.state);
+              return permissions.state;
+            } catch (err) {
+              console.log('Permission API not available:', err);
+              return 'unknown';
+            }
+          };
+
+          // Initialize camera check on page load
+          checkCameraPermissions();
           
           document.getElementById("btn").onclick = async () => {
             const f = document.getElementById("file").files[0];
@@ -268,12 +364,23 @@ def viewer():
             showStatus("Converting image to 3D model...", "info");
             
             const fd = new FormData();
-            fd.append("file", f);
+            fd.append("image", f);
             
             try {
-              const res = await fetch("/make-glb", { method:"POST", body:fd });
+              // Chrome-specific fetch configuration
+              const res = await fetch("/make-glb", { 
+                method: "POST", 
+                body: fd,
+                mode: 'cors',
+                credentials: 'omit',
+                headers: {
+                  'Accept': 'model/gltf-binary, */*'
+                }
+              });
+              
               if (!res.ok) {
-                throw new Error("Server error: " + res.status);
+                const errorText = await res.text();
+                throw new Error(`Server error ${res.status}: ${errorText}`);
               }
               
               const blob = await res.blob();
@@ -305,88 +412,34 @@ def viewer():
             }
           };
           
-          // Handle AR button click
+          // Handle AR button click - Simple version that was working
           arButton.addEventListener('click', () => {
-            if (viewer.src) {
-              showStatus("Launching AR viewer...", "info");
-              try {
-                // Check if we're on HTTPS (required for AR on many devices)
-                if (location.protocol !== 'https:' && !location.hostname.includes('localhost') && !location.hostname.includes('127.0.0.1')) {
-                  showStatus("Warning: AR may require HTTPS to work properly on some devices", "error");
-                }
-                
-                // Check browser type
-                const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
-                const isAndroid = /Android/.test(navigator.userAgent);
-                const isChrome = /Chrome/.test(navigator.userAgent) && /Google Inc/.test(navigator.vendor);
-                const hasWebXR = 'xr' in navigator && 'isSessionSupported' in navigator.xr;
-                
-                // Hide the built-in AR button first to prevent conflicts
-                if (builtInArButton) {
-                  builtInArButton.style.display = "none";
-                }
-                
-                // Special handling for Chrome on Android
-                if (isAndroid && isChrome) {
-                  if (hasWebXR) {
-                    showStatus("Launching WebXR AR experience...", "info");
-                    // WebXR Mode (newer Chrome versions)
-                    
-                    // Make sure model-viewer has fully loaded
-                    if (viewer.canActivateAR) {
-                      // WebXR should be first in ar-modes to prioritize it
-                      viewer.setAttribute('ar-modes', 'webxr scene-viewer quick-look');
-                      
-                      setTimeout(() => {
-                        viewer.activateAR();
-                      }, 500);
-                    } else {
-                      showStatus("WebXR not available, trying Scene Viewer...", "info");
-                      // Fallback to Scene Viewer
-                      launchSceneViewer();
-                    }
-                  } else {
-                    // Scene Viewer mode (for older Chrome versions)
-                    showStatus("Launching Scene Viewer AR experience...", "info");
-                    launchSceneViewer();
-                  }
-                } else if (isIOS) {
-                  // iOS Quick Look
-                  showStatus("Launching Quick Look AR experience...", "info");
-                  setTimeout(() => {
-                    viewer.activateAR();
-                  }, 300);
-                } else {
-                  // General fallback
-                  if (viewer.canActivateAR) {
-                    setTimeout(() => {
-                      viewer.activateAR();
-                    }, 300);
-                  } else {
-                    showStatus("AR mode not available on this device/browser", "error");
-                  }
-                }
-                
-                // Function to launch Scene Viewer as a fallback
-                function launchSceneViewer() {
-                  // Prioritize scene-viewer for Android
-                  viewer.setAttribute('ar-modes', 'scene-viewer webxr quick-look');
-                  
-                  setTimeout(() => {
-                    try {
-                      viewer.activateAR();
-                    } catch (err) {
-                      showStatus("Error launching Scene Viewer: " + err.message, "error");
-                    }
-                  }, 300);
-                }
-                
-              } catch (error) {
-                console.error("AR activation error:", error);
-                showStatus("Error launching AR: " + error.message, "error");
-              }
-            } else {
+            if (!viewer.src) {
               showStatus("Please create a 3D model first!", "error");
+              return;
+            }
+
+            showStatus("Launching AR viewer...", "info");
+            
+            try {
+              // For local testing, allow without HTTPS check
+              const isLocalhost = location.hostname.includes('localhost') || 
+                                location.hostname.includes('127.0.0.1') || 
+                                location.hostname.startsWith('192.168.');
+              
+              if (location.protocol !== 'https:' && !isLocalhost) {
+                showStatus("AR requires HTTPS. Please use the deployed version on your mobile device.", "error");
+                return;
+              }
+              
+              // Simple AR activation - this was working in phone screen
+              setTimeout(() => {
+                viewer.activateAR();
+              }, 500);
+              
+            } catch (error) {
+              console.error("AR activation error:", error);
+              showStatus("Error launching AR: " + error.message, "error");
             }
           });
           
@@ -406,7 +459,7 @@ def viewer():
           // Check Chrome version
           let chromeVersion = 'N/A';
           if (isChrome) {
-            const match = navigator.userAgent.match(/Chrome\/([0-9]+)/);
+            const match = navigator.userAgent.match(/Chrome\\/([0-9]+)/);
             if (match) {
               chromeVersion = match[1];
             }
@@ -415,7 +468,7 @@ def viewer():
           // Check Android version
           let androidVersion = 'N/A';
           if (isAndroid) {
-            const match = navigator.userAgent.match(/Android ([0-9]+)\.([0-9]+)/);
+            const match = navigator.userAgent.match(/Android ([0-9]+)\\.([0-9]+)/);
             if (match) {
               androidVersion = `${match[1]}.${match[2]}`;
             }
@@ -436,6 +489,7 @@ def viewer():
             </details>
           `;
           document.body.appendChild(debugInfo);
+        }); // End DOMContentLoaded
         </script>
       </body>
     </html>
